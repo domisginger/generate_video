@@ -95,8 +95,16 @@ def queue_prompt(prompt):
     logger.info(f"Queueing prompt to: {url}")
     p = {"prompt": prompt, "client_id": client_id}
     data = json.dumps(p).encode('utf-8')
-    req = urllib.request.Request(url, data=data)
-    return json.loads(urllib.request.urlopen(req).read())
+    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+    try:
+        response = urllib.request.urlopen(req)
+        return json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8')
+        logger.error(f"HTTP Error {e.code}: {e.reason}")
+        logger.error(f"Server response: {error_body}")
+        logger.error(f"Prompt data: {json.dumps(p, indent=2)}")
+        raise
 
 def get_image(filename, subfolder, folder_type):
     url = f"http://{server_address}:8188/view"
