@@ -11,6 +11,7 @@ import urllib.parse
 import binascii # Base64 에러 처리를 위해 import
 import subprocess
 import time
+import shutil
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 server_address = os.getenv('SERVER_ADDRESS', '127.0.0.1')
 client_id = str(uuid.uuid4())
+comfyui_input_dir = os.getenv('COMFYUI_INPUT_DIR', '/ComfyUI/input')
 def to_nearest_multiple_of_16(value):
     """주어진 값을 가장 가까운 16의 배수로 보정, 최소 16 보장"""
     try:
@@ -29,21 +31,25 @@ def to_nearest_multiple_of_16(value):
         adjusted = 16
     return adjusted
 def process_input(input_data, temp_dir, output_filename, input_type):
-    """입력 데이터를 처리하여 파일 경로를 반환하는 함수"""
+    """입력 데이터를 처리하여 ComfyUI input에 저장하고 파일명을 반환하는 함수"""
     if input_type == "path":
         # 경로인 경우 그대로 반환
         logger.info(f"📁 경로 입력 처리: {input_data}")
-        return input_data
+        return stage_image_to_comfyui_input(input_data, temp_dir, output_filename)
     elif input_type == "url":
         # URL인 경우 다운로드
         logger.info(f"🌐 URL 입력 처리: {input_data}")
-        os.makedirs(temp_dir, exist_ok=True)
-        file_path = os.path.abspath(os.path.join(temp_dir, output_filename))
-        return download_file_from_url(input_data, file_path)
+        os.makedirs(comfyui_input_dir, exist_ok=True)
+        file_path = os.path.abspath(os.path.join(comfyui_input_dir, f"{temp_dir}_{output_filename}"))
+        download_file_from_url(input_data, file_path)
+        return os.path.basename(file_path)
     elif input_type == "base64":
         # Base64인 경우 디코딩하여 저장
         logger.info(f"🔢 Base64 입력 처리")
-        return save_base64_to_file(input_data, temp_dir, output_filename)
+        os.makedirs(comfyui_input_dir, exist_ok=True)
+        file_path = os.path.abspath(os.path.join(comfyui_input_dir, f"{temp_dir}_{output_filename}"))
+        save_base64_to_file(input_data, file_path)
+        return os.path.basename(file_path)
     else:
         raise Exception(f"지원하지 않는 입력 타입: {input_type}")
 
@@ -70,25 +76,41 @@ def download_file_from_url(url, output_path):
         raise Exception(f"다운로드 중 오류 발생: {e}")
 
 
-def save_base64_to_file(base64_data, temp_dir, output_filename):
+def save_base64_to_file(base64_data, output_path):
     """Base64 데이터를 파일로 저장하는 함수"""
     try:
         # Base64 문자열 디코딩
         decoded_data = base64.b64decode(base64_data)
-        
-        # 디렉토리가 존재하지 않으면 생성
-        os.makedirs(temp_dir, exist_ok=True)
-        
         # 파일로 저장
-        file_path = os.path.abspath(os.path.join(temp_dir, output_filename))
-        with open(file_path, 'wb') as f:
+        with open(output_path, 'wb') as f:
             f.write(decoded_data)
-        
-        logger.info(f"✅ Base64 입력을 '{file_path}' 파일로 저장했습니다.")
-        return file_path
+
+        logger.info(f"✅ Base64 입력을 '{output_path}' 파일로 저장했습니다.")
+        return output_path
     except (binascii.Error, ValueError) as e:
         logger.error(f"❌ Base64 디코딩 실패: {e}")
         raise Exception(f"Base64 디코딩 실패: {e}")
+
+def stage_image_to_comfyui_input(input_path, temp_dir, output_filename):
+    """이미지 파일을 ComfyUI input 디렉토리에 복사하고 파일명을 반환"""
+    if not input_path:
+        raise Exception("이미지 경로가 비어 있습니다.")
+
+    abs_input_path = os.path.abspath(input_path)
+    if not os.path.isfile(abs_input_path):
+        raise Exception(f"Invalid image file: {abs_input_path}")
+
+    os.makedirs(comfyui_input_dir, exist_ok=True)
+    target_name = f"{temp_dir}_{output_filename}"
+    target_path = os.path.abspath(os.path.join(comfyui_input_dir, target_name))
+
+    if abs_input_path != target_path:
+        shutil.copy2(abs_input_path, target_path)
+        logger.info(f"✅ 이미지 파일을 ComfyUI input으로 복사했습니다: {abs_input_path} -> {target_path}")
+    else:
+        logger.info(f"✅ 이미지 파일이 이미 ComfyUI input에 있습니다: {target_path}")
+
+    return target_name
     
 def queue_prompt(prompt):
     url = f"http://{server_address}:8188/prompt"
@@ -200,8 +222,11 @@ def handler(job):
         image_path = process_input(job_input["image_base64"], task_id, "input_image.jpg", "base64")
     else:
         # 기본값 사용
-        image_path = "/example_image.png"
-        logger.info("기본 이미지 파일을 사용합니다: /example_image.png")
+        default_image_path = os.path.join(comfyui_input_dir, "example_image.png")
+        if not os.path.isfile(default_image_path):
+            raise Exception(f"기본 이미지 파일을 찾을 수 없습니다: {default_image_path}. image_path/image_url/image_base64 중 하나를 제공하세요.")
+        image_path = os.path.basename(default_image_path)
+        logger.info(f"기본 이미지 파일을 사용합니다: {default_image_path}")
 
     # 엔드 이미지 입력 처리 (end_image_path, end_image_url, end_image_base64 중 하나만 사용)
     end_image_path_local = None
@@ -356,6 +381,16 @@ def handler(job):
                 raise Exception(f"Node {node_id} missing 'inputs'")
             nodes_validated += 1
         logger.info(f"✅ Validated {nodes_validated} nodes in workflow")
+
+        # Ensure input images exist in ComfyUI input directory
+        if image_path:
+            image_full_path = os.path.join(comfyui_input_dir, image_path)
+            if not os.path.isfile(image_full_path):
+                raise Exception(f"Input image not found in ComfyUI input directory: {image_full_path}")
+        if end_image_path_local:
+            end_image_full_path = os.path.join(comfyui_input_dir, end_image_path_local)
+            if not os.path.isfile(end_image_full_path):
+                raise Exception(f"End image not found in ComfyUI input directory: {end_image_full_path}")
     except Exception as validation_error:
         logger.error(f"❌ Prompt validation failed: {validation_error}")
         raise
