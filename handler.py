@@ -94,17 +94,40 @@ def queue_prompt(prompt):
     url = f"http://{server_address}:8188/prompt"
     logger.info(f"Queueing prompt to: {url}")
     p = {"prompt": prompt, "client_id": client_id}
-    data = json.dumps(p).encode('utf-8')
+    
+    # Validate prompt structure before sending
+    try:
+        data = json.dumps(p).encode('utf-8')
+    except Exception as json_error:
+        logger.error(f"Failed to serialize prompt to JSON: {json_error}")
+        logger.error(f"Prompt structure: {prompt}")
+        raise Exception(f"Invalid prompt structure: {json_error}")
+    
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     try:
         response = urllib.request.urlopen(req)
         return json.loads(response.read())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8')
-        logger.error(f"HTTP Error {e.code}: {e.reason}")
-        logger.error(f"Server response: {error_body}")
-        logger.error(f"Prompt data: {json.dumps(p, indent=2)}")
-        raise
+        logger.error(f"❌ HTTP Error {e.code}: {e.reason}")
+        logger.error(f"❌ Server response: {error_body}")
+        logger.error(f"❌ Request URL: {url}")
+        logger.error(f"❌ Client ID: {client_id}")
+        # Log a sample of the prompt (first few nodes) to avoid excessive logging
+        try:
+            prompt_keys = list(prompt.keys())[:5] if isinstance(prompt, dict) else "Not a dict"
+            logger.error(f"❌ Prompt node IDs (first 5): {prompt_keys}")
+            # Check for common issues
+            for node_id, node_data in list(prompt.items())[:3]:
+                if not isinstance(node_data, dict):
+                    logger.error(f"❌ Node {node_id} is not a dict: {type(node_data)}")
+                elif "inputs" not in node_data:
+                    logger.error(f"❌ Node {node_id} missing 'inputs' key")
+                elif "class_type" not in node_data:
+                    logger.error(f"❌ Node {node_id} missing 'class_type' key")
+        except Exception as log_error:
+            logger.error(f"❌ Error while logging prompt details: {log_error}")
+        raise Exception(f"ComfyUI API Error {e.code}: {error_body}")
 
 def get_image(filename, subfolder, folder_type):
     url = f"http://{server_address}:8188/view"
@@ -149,8 +172,17 @@ def get_videos(ws, prompt):
     return output_videos
 
 def load_workflow(workflow_path):
-    with open(workflow_path, 'r') as file:
+    with open(workflow_path, 'r', encoding='utf-8') as file:
         return json.load(file)
+
+def set_node_input(prompt, node_id, input_key, value, node_description=""):
+    """Safely set a node input value with validation"""
+    if node_id not in prompt:
+        raise Exception(f"Node {node_id} ({node_description}) not found in workflow. Available nodes: {list(prompt.keys())[:20]}")
+    if "inputs" not in prompt[node_id]:
+        raise Exception(f"Node {node_id} ({node_description}) has no 'inputs' field")
+    prompt[node_id]["inputs"][input_key] = value
+    logger.debug(f"Set node {node_id} ({node_description}) input '{input_key}' = {value}")
 
 def handler(job):
     job_input = job.get("input", {})
@@ -195,8 +227,19 @@ def handler(job):
     
     prompt = load_workflow(workflow_file)
     
+    # Validate workflow structure
+    if not isinstance(prompt, dict):
+        raise Exception(f"Workflow file {workflow_file} did not load as a dictionary")
+    logger.info(f"Loaded workflow with {len(prompt)} nodes")
+    
     length = job_input.get("length", 81)
     steps = job_input.get("steps", 10)
+
+    # Validate required nodes exist
+    required_nodes = ["244", "541", "135", "220", "540", "235", "236", "498"]
+    missing_nodes = [node for node in required_nodes if node not in prompt]
+    if missing_nodes:
+        raise Exception(f"Workflow missing required nodes: {missing_nodes}. Available nodes: {list(prompt.keys())[:10]}")
 
     prompt["244"]["inputs"]["image"] = image_path
     prompt["541"]["inputs"]["num_frames"] = length
@@ -217,6 +260,7 @@ def handler(job):
     prompt["235"]["inputs"]["value"] = adjusted_width
     prompt["236"]["inputs"]["value"] = adjusted_height
     prompt["498"]["inputs"]["context_overlap"] = job_input.get("context_overlap", 48)
+    prompt["498"]["inputs"]["context_frames"] = length
     
     # step 설정 적용
     if "834" in prompt:
@@ -293,6 +337,29 @@ def handler(job):
             if attempt == max_attempts - 1:
                 raise Exception("웹소켓 연결 시간 초과 (3분)")
             time.sleep(5)
+    
+    # Final validation before sending prompt
+    logger.info(f"🔍 Validating prompt structure before queue...")
+    try:
+        # Quick validation that prompt is serializable
+        test_json = json.dumps({"prompt": prompt, "client_id": client_id})
+        logger.info(f"✅ Prompt structure is valid JSON ({len(test_json)} bytes)")
+        
+        # Check for common issues in nodes
+        nodes_validated = 0
+        for node_id, node_data in prompt.items():
+            if not isinstance(node_data, dict):
+                raise Exception(f"Node {node_id} is not a dictionary: {type(node_data)}")
+            if "class_type" not in node_data:
+                raise Exception(f"Node {node_id} missing 'class_type'")
+            if "inputs" not in node_data:
+                raise Exception(f"Node {node_id} missing 'inputs'")
+            nodes_validated += 1
+        logger.info(f"✅ Validated {nodes_validated} nodes in workflow")
+    except Exception as validation_error:
+        logger.error(f"❌ Prompt validation failed: {validation_error}")
+        raise
+    
     videos = get_videos(ws, prompt)
     ws.close()
 
