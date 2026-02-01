@@ -267,7 +267,6 @@ def handler(job):
     # Select workflow file (use FLF2V workflow if end_image_* is present)
     workflow_file = "/new_Wan22_flf2v_api.json" if end_image_path_local else "/new_Wan22_api.json"
     logger.info(f"Using {'FLF2V' if end_image_path_local else 'single'} workflow with {lora_count} LoRA pairs")
-    
     prompt = load_workflow(workflow_file)
     
     # Validate workflow structure
