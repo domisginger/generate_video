@@ -21,94 +21,112 @@ server_address = os.getenv('SERVER_ADDRESS', '127.0.0.1')
 client_id = str(uuid.uuid4())
 comfyui_input_dir = os.getenv('COMFYUI_INPUT_DIR', '/ComfyUI/input')
 def to_nearest_multiple_of_16(value):
-    """주어진 값을 가장 가까운 16의 배수로 보정, 최소 16 보장"""
+    """Adjust the given value to the nearest multiple of 16, with a minimum of 16"""
     try:
         numeric_value = float(value)
     except Exception:
-        raise Exception(f"width/height 값이 숫자가 아닙니다: {value}")
+        raise Exception(f"width/height value is not a number: {value}")
     adjusted = int(round(numeric_value / 16.0) * 16)
     if adjusted < 16:
         adjusted = 16
     return adjusted
 def process_input(input_data, temp_dir, output_filename, input_type):
-    """입력 데이터를 처리하여 ComfyUI input에 저장하고 파일명을 반환하는 함수"""
+    """Process input data, save it to ComfyUI input directory, and return the filename"""
     if input_type == "path":
-        # 경로인 경우 그대로 반환
-        logger.info(f"📁 경로 입력 처리: {input_data}")
+        # Return path as-is
+        logger.info(f"📁 Processing path input: {input_data}")
         return stage_image_to_comfyui_input(input_data, temp_dir, output_filename)
     elif input_type == "url":
-        # URL인 경우 다운로드
-        logger.info(f"🌐 URL 입력 처리: {input_data}")
+        # Download from URL
+        logger.info(f"🌐 Processing URL input: {input_data}")
         os.makedirs(comfyui_input_dir, exist_ok=True)
         file_path = os.path.abspath(os.path.join(comfyui_input_dir, f"{temp_dir}_{output_filename}"))
         download_file_from_url(input_data, file_path)
         return os.path.basename(file_path)
     elif input_type == "base64":
-        # Base64인 경우 디코딩하여 저장
-        logger.info(f"🔢 Base64 입력 처리")
+        # Decode and save Base64 data
+        logger.info(f"🔢 Processing Base64 input")
         os.makedirs(comfyui_input_dir, exist_ok=True)
         file_path = os.path.abspath(os.path.join(comfyui_input_dir, f"{temp_dir}_{output_filename}"))
         save_base64_to_file(input_data, file_path)
         return os.path.basename(file_path)
     else:
-        raise Exception(f"지원하지 않는 입력 타입: {input_type}")
+        raise Exception(f"Unsupported input type: {input_type}")
 
         
 def download_file_from_url(url, output_path):
-    """URL에서 파일을 다운로드하는 함수"""
+    """Download a file from URL"""
     try:
-        # wget을 사용하여 파일 다운로드
+        # Download file using wget
         result = subprocess.run([
             'wget', '-O', output_path, '--no-verbose', url
         ], capture_output=True, text=True)
         
         if result.returncode == 0:
-            logger.info(f"✅ URL에서 파일을 성공적으로 다운로드했습니다: {url} -> {output_path}")
+            logger.info(f"✅ Successfully downloaded file from URL: {url} -> {output_path}")
             return output_path
         else:
-            logger.error(f"❌ wget 다운로드 실패: {result.stderr}")
-            raise Exception(f"URL 다운로드 실패: {result.stderr}")
+            logger.error(f"❌ wget download failed: {result.stderr}")
+            raise Exception(f"URL download failed: {result.stderr}")
     except subprocess.TimeoutExpired:
-        logger.error("❌ 다운로드 시간 초과")
-        raise Exception("다운로드 시간 초과")
+        logger.error("❌ Download timeout")
+        raise Exception("Download timeout")
     except Exception as e:
-        logger.error(f"❌ 다운로드 중 오류 발생: {e}")
-        raise Exception(f"다운로드 중 오류 발생: {e}")
+        logger.error(f"❌ Error occurred during download: {e}")
+        raise Exception(f"Error occurred during download: {e}")
 
 
 def save_base64_to_file(base64_data, output_path):
-    """Base64 데이터를 파일로 저장하는 함수"""
+    """Save Base64 data to a file"""
     try:
-        # Base64 문자열 디코딩
+        # Decode Base64 string
         decoded_data = base64.b64decode(base64_data)
-        # 파일로 저장
+        # Save to file
         with open(output_path, 'wb') as f:
             f.write(decoded_data)
 
-        logger.info(f"✅ Base64 입력을 '{output_path}' 파일로 저장했습니다.")
+        logger.info(f"✅ Saved Base64 input to file '{output_path}'.")
         return output_path
     except (binascii.Error, ValueError) as e:
-        logger.error(f"❌ Base64 디코딩 실패: {e}")
-        raise Exception(f"Base64 디코딩 실패: {e}")
+        logger.error(f"❌ Base64 decoding failed: {e}")
+        raise Exception(f"Base64 decoding failed: {e}")
 
 def stage_image_to_comfyui_input(input_path, temp_dir, output_filename):
-    """이미지 파일을 ComfyUI input 디렉토리에 복사하고 파일명을 반환"""
+    """Copy image file to ComfyUI input directory and return filename"""
     if not input_path:
-        raise Exception("이미지 경로가 비어 있습니다.")
+        raise Exception("Image path is empty.")
 
+    # Try both absolute and as-is path
     abs_input_path = os.path.abspath(input_path)
-    if not os.path.isfile(abs_input_path):
-        raise Exception(f"Invalid image file: {abs_input_path}")
+    
+    # Check if file exists at the given path or absolute path
+    if os.path.isfile(input_path):
+        source_path = input_path
+        logger.info(f"✅ Found file at original path: {input_path}")
+    elif os.path.isfile(abs_input_path):
+        source_path = abs_input_path
+        logger.info(f"✅ Found file at absolute path: {abs_input_path}")
+    else:
+        # Log directory contents for debugging
+        parent_dir = os.path.dirname(input_path) or os.path.dirname(abs_input_path)
+        if os.path.isdir(parent_dir):
+            files_in_dir = os.listdir(parent_dir)
+            logger.error(f"❌ File not found. Parent directory '{parent_dir}' contains: {files_in_dir[:10]}")
+        else:
+            logger.error(f"❌ Parent directory doesn't exist: {parent_dir}")
+        
+        logger.error(f"❌ Tried paths: {input_path}, {abs_input_path}")
+        raise Exception(f"Invalid image file: {input_path} (absolute: {abs_input_path})")
 
     os.makedirs(comfyui_input_dir, exist_ok=True)
     target_name = f"{temp_dir}_{output_filename}"
     target_path = os.path.abspath(os.path.join(comfyui_input_dir, target_name))
 
-    if abs_input_path != target_path:
-        shutil.copy2(abs_input_path, target_path)
-        logger.info(f"✅ 이미지 파일을 ComfyUI input으로 복사했습니다: {abs_input_path} -> {target_path}")
+    if source_path != target_path:
+        shutil.copy2(source_path, target_path)
+        logger.info(f"✅ Copied image file to ComfyUI input: {source_path} -> {target_path}")
     else:
-        logger.info(f"✅ 이미지 파일이 이미 ComfyUI input에 있습니다: {target_path}")
+        logger.info(f"✅ Image file already in ComfyUI input: {target_path}")
 
     return target_name
     
@@ -212,7 +230,7 @@ def handler(job):
     logger.info(f"Received job input: {job_input}")
     task_id = f"task_{uuid.uuid4()}"
 
-    # 이미지 입력 처리 (image_path, image_url, image_base64 중 하나만 사용)
+    # Process image input (use only one of image_path, image_url, image_base64)
     image_path = None
     if "image_path" in job_input:
         image_path = process_input(job_input["image_path"], task_id, "input_image.jpg", "path")
@@ -221,14 +239,14 @@ def handler(job):
     elif "image_base64" in job_input:
         image_path = process_input(job_input["image_base64"], task_id, "input_image.jpg", "base64")
     else:
-        # 기본값 사용
+        # Use default
         default_image_path = os.path.join(comfyui_input_dir, "example_image.png")
         if not os.path.isfile(default_image_path):
-            raise Exception(f"기본 이미지 파일을 찾을 수 없습니다: {default_image_path}. image_path/image_url/image_base64 중 하나를 제공하세요.")
+            raise Exception(f"Default image file not found: {default_image_path}. Please provide one of image_path/image_url/image_base64.")
         image_path = os.path.basename(default_image_path)
-        logger.info(f"기본 이미지 파일을 사용합니다: {default_image_path}")
+        logger.info(f"Using default image file: {default_image_path}")
 
-    # 엔드 이미지 입력 처리 (end_image_path, end_image_url, end_image_base64 중 하나만 사용)
+    # Process end image input (use only one of end_image_path, end_image_url, end_image_base64)
     end_image_path_local = None
     if "end_image_path" in job_input:
         end_image_path_local = process_input(job_input["end_image_path"], task_id, "end_image.jpg", "path")
@@ -237,16 +255,16 @@ def handler(job):
     elif "end_image_base64" in job_input:
         end_image_path_local = process_input(job_input["end_image_base64"], task_id, "end_image.jpg", "base64")
     
-    # LoRA 설정 확인 - 배열로 받아서 처리
+    # Check LoRA configuration - process as array
     lora_pairs = job_input.get("lora_pairs", [])
     
-    # 최대 4개 LoRA까지 지원
+    # Support up to 4 LoRAs
     lora_count = min(len(lora_pairs), 4)
-    if lora_count > len(lora_pairs):
-        logger.warning(f"LoRA 개수가 {len(lora_pairs)}개입니다. 최대 4개까지만 지원됩니다. 처음 4개만 사용합니다.")
+    if len(lora_pairs) > 4:
+        logger.warning(f"LoRA count is {len(lora_pairs)}. Only up to 4 are supported. Using first 4 only.")
         lora_pairs = lora_pairs[:4]
     
-    # 워크플로우 파일 선택 (end_image_*가 있으면 FLF2V 워크플로 사용)
+    # Select workflow file (use FLF2V workflow if end_image_* is present)
     workflow_file = "/new_Wan22_flf2v_api.json" if end_image_path_local else "/new_Wan22_api.json"
     logger.info(f"Using {'FLF2V' if end_image_path_local else 'single'} workflow with {lora_count} LoRA pairs")
     
@@ -273,7 +291,7 @@ def handler(job):
     prompt["220"]["inputs"]["seed"] = job_input["seed"]
     prompt["540"]["inputs"]["seed"] = job_input["seed"]
     prompt["540"]["inputs"]["cfg"] = job_input["cfg"]
-    # 해상도(폭/높이) 16배수 보정
+    # Adjust resolution (width/height) to multiple of 16
     original_width = job_input["width"]
     original_height = job_input["height"]
     adjusted_width = to_nearest_multiple_of_16(original_width)
@@ -287,27 +305,30 @@ def handler(job):
     prompt["498"]["inputs"]["context_overlap"] = job_input.get("context_overlap", 48)
     prompt["498"]["inputs"]["context_frames"] = length
     
-    # step 설정 적용
+    # Apply step configuration
     if "834" in prompt:
         prompt["834"]["inputs"]["steps"] = steps
         logger.info(f"Steps set to: {steps}")
         lowsteps = int(steps*0.6)
-        prompt["829"]["inputs"]["step"] = lowsteps
-        logger.info(f"LowSteps set to: {lowsteps}")
+        if "829" in prompt:
+            prompt["829"]["inputs"]["step"] = lowsteps
+            logger.info(f"LowSteps set to: {lowsteps}")
 
-    # 엔드 이미지가 있는 경우 617번 노드에 경로 적용 (FLF2V 전용)
+    # Apply end image path to node 617 if present (FLF2V only)
     if end_image_path_local:
+        if "617" not in prompt:
+            raise Exception("Node 617 (end image input) not found in FLF2V workflow")
         prompt["617"]["inputs"]["image"] = end_image_path_local
     
-    # LoRA 설정 적용 - HIGH LoRA는 노드 279, LOW LoRA는 노드 553
+    # Apply LoRA configuration - HIGH LoRA is node 279, LOW LoRA is node 553
     if lora_count > 0:
-        # HIGH LoRA 노드 (279번)
+        # HIGH LoRA node (279)
         high_lora_node_id = "279"
         
-        # LOW LoRA 노드 (553번)
+        # LOW LoRA node (553)
         low_lora_node_id = "553"
         
-        # 입력받은 LoRA pairs 적용 (lora_1부터 시작)
+        # Apply received LoRA pairs (starting from lora_1)
         for i, lora_pair in enumerate(lora_pairs):
             if i < 4:  # 최대 4개까지만
                 lora_high = lora_pair.get("high")
@@ -315,13 +336,13 @@ def handler(job):
                 lora_high_weight = lora_pair.get("high_weight", 1.0)
                 lora_low_weight = lora_pair.get("low_weight", 1.0)
                 
-                # HIGH LoRA 설정 (노드 279번, lora_1부터 시작)
+                # Configure HIGH LoRA (node 279, starting from lora_1)
                 if lora_high:
                     prompt[high_lora_node_id]["inputs"][f"lora_{i+1}"] = lora_high
                     prompt[high_lora_node_id]["inputs"][f"strength_{i+1}"] = lora_high_weight
                     logger.info(f"LoRA {i+1} HIGH applied to node 279: {lora_high} with weight {lora_high_weight}")
                 
-                # LOW LoRA 설정 (노드 553번, lora_1부터 시작)
+                # Configure LOW LoRA (node 553, starting from lora_1)
                 if lora_low:
                     prompt[low_lora_node_id]["inputs"][f"lora_{i+1}"] = lora_low
                     prompt[low_lora_node_id]["inputs"][f"strength_{i+1}"] = lora_low_weight
@@ -330,37 +351,35 @@ def handler(job):
     ws_url = f"ws://{server_address}:8188/ws?clientId={client_id}"
     logger.info(f"Connecting to WebSocket: {ws_url}")
     
-    # 먼저 HTTP 연결이 가능한지 확인
+    # First check if HTTP connection is available
     http_url = f"http://{server_address}:8188/"
     logger.info(f"Checking HTTP connection to: {http_url}")
     
-    # HTTP 연결 확인 (최대 1분)
+    # Check HTTP connection (max 1 minute)
     max_http_attempts = 180
     for http_attempt in range(max_http_attempts):
         try:
-            import urllib.request
             response = urllib.request.urlopen(http_url, timeout=5)
-            logger.info(f"HTTP 연결 성공 (시도 {http_attempt+1})")
+            logger.info(f"HTTP connection successful (attempt {http_attempt+1})")
             break
         except Exception as e:
-            logger.warning(f"HTTP 연결 실패 (시도 {http_attempt+1}/{max_http_attempts}): {e}")
+            logger.warning(f"HTTP connection failed (attempt {http_attempt+1}/{max_http_attempts}): {e}")
             if http_attempt == max_http_attempts - 1:
-                raise Exception("ComfyUI 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.")
+                raise Exception("Cannot connect to ComfyUI server. Please check if server is running.")
             time.sleep(1)
     
     ws = websocket.WebSocket()
-    # 웹소켓 연결 시도 (최대 3분)
-    max_attempts = int(180/5)  # 3분 (1초에 한 번씩 시도)
+    # Attempt WebSocket connection (max 3 minutes)
+    max_attempts = int(180/5)  # 3 minutes (attempt every second)
     for attempt in range(max_attempts):
-        import time
         try:
             ws.connect(ws_url)
-            logger.info(f"웹소켓 연결 성공 (시도 {attempt+1})")
+            logger.info(f"WebSocket connection successful (attempt {attempt+1})")
             break
         except Exception as e:
-            logger.warning(f"웹소켓 연결 실패 (시도 {attempt+1}/{max_attempts}): {e}")
+            logger.warning(f"WebSocket connection failed (attempt {attempt+1}/{max_attempts}): {e}")
             if attempt == max_attempts - 1:
-                raise Exception("웹소켓 연결 시간 초과 (3분)")
+                raise Exception("WebSocket connection timeout (3 minutes)")
             time.sleep(5)
     
     # Final validation before sending prompt
@@ -398,11 +417,11 @@ def handler(job):
     videos = get_videos(ws, prompt)
     ws.close()
 
-    # 이미지가 없는 경우 처리
+    # Handle case when no videos found
     for node_id in videos:
         if videos[node_id]:
             return {"video": videos[node_id][0]}
     
-    return {"error": "비디오를를 찾을 수 없습니다."}
+    return {"error": "Video not found."}
 
 runpod.serverless.start({"handler": handler})
